@@ -8,23 +8,29 @@ Its prototype is simple:
 The placeholders in the format string are marked by `%` and are followed by one or more of these elements, in this order:
 
 * An optional number followed by a `$` sign that selects which argument index to use for the value. If not specified, arguments will be placed in the same order as the placeholders in the input string.
-* An optional `+` sign that forces to preceed the result with a plus or minus sign on numeric values. By default, only the `-` sign is used on negative numbers.
-* An optional padding specifier that says what character to use for padding (if specified). Possible values are `0` or any other character precedeed by a `'` (single quote). The default is to pad with *spaces*.
-* An optional `-` sign, that causes sprintf to left-align the result of this placeholder. The default is to right-align the result.
-* An optional number, that says how many characters the result should have. If the value to be returned is shorter than this number, the result will be padded.
-* An optional precision modifier, consisting of a `.` (dot) followed by a number, that says how many digits should be displayed for floating point numbers. When used on a string, it causes the result to be truncated.
+* Flags (optional, order does not matter)
+    * `+` sign: that forces to preceed the result with a plus or minus sign on numeric values. By default, only the `-` sign is used on negative numbers.
+    * whitespace: put a single placeholder whitespace on a positive number or zero.
+    * `'` followed by a padding specifier: that says what character to use for padding (if specified). Possible values are `0` or any other character precedeed by a `'` (single quote). The default is to pad with *spaces*.
+    * `-` sign: that causes sprintf to left-align the result of this placeholder. The default is to right-align the result.
+    * `0`: use leading zeros to pad strings.
+* An optional number, that says how many characters the result should have at minimum. If the value to be returned is shorter than this number, the result will be padded.
+* An optional precision modifier, consisting of a `.` (dot) followed by a number, that says how many digits should be displayed for floating point numbers.
+   When used on a string, it causes the result to be truncated. For integers, it causes the string to be padded by the leading zeros so that the number of the digits exceeds the precision number.
 * A type specifier that can be any of:
-    * `%` — yields a literal `%` character
-    * `b` — yields an integer as a binary number
-    * `c` — yields an integer as the character with that ASCII value
-    * `d` or `i` — yields an integer as a signed decimal number
-    * `e` — yields a float using scientific notation
-    * `u` — yields an integer as an unsigned decimal number
-    * `f` — yields a float as is
-    * `o` — yields an integer as an octal number
-    * `s` — yields a string as is
-    * `x` — yields an integer as a hexadecimal number (lower-case)
-    * `X` — yields an integer as a hexadecimal number (upper-case)
+    * `%` — a literal `%` character. This specifier does not consume argument.
+    * `b` — a binary (0/1) representation of an integer.
+    * `c` — yields an integer as the character with that Unicode codepoint.
+    * `d` or `i` — an ordinary decimal representation of an integer.
+    * `e` or `E` — a floating point number using scientific notation. (with notation `x`e+`y` means `x` × 10^`y`)
+    * `u` — an decimal representation of an integer, interpreted as an unsigned number.
+    * `f` or `F`  — a float as is.
+    * `o` — an octal representation of an integer.
+    * `s` — a string as is.
+    * `x` or `X` — a hexadecimal representation of an integer.
+* Uppercase specifier yields an upperfield number (for example, "0xFE", "0x2.000000E+0", or "INF")
+
+Notes: sprintf.js does not support "#" flag and "'" flag (for grouping digits in thousands) now.
 
 ## JavaScript `vsprintf`
 `vsprintf` is the same as `sprintf` except that it accepts an array of arguments, rather than a variable number of arguments:
@@ -39,39 +45,31 @@ And, of course, you can repeat the placeholders without having to increase the n
 
 ## Named arguments
 Format strings may contain replacement fields rather than positional placeholders. Instead of referring to a certain argument, you can now refer to a certain key within an object. Replacement fields are surrounded by rounded parentheses - `(` and `)` - and begin with a keyword that refers to a key:
-
     var user = {
         name: "Dolly"
     }
     sprintf("Hello %(name)s", user) // Hello Dolly
-Keywords in replacement fields can be optionally followed by any number of keywords or indexes:
 
+Keywords in replacement fields can be optionally followed by any number of keywords or indexes:
     var users = [
         {name: "Dolly"},
         {name: "Molly"},
         {name: "Polly"}
     ]
     sprintf("Hello %(users[0].name)s, %(users[1].name)s and %(users[2].name)s", {users: users}) // Hello Dolly, Molly and Polly
-Note: mixing positional and named placeholders is not (yet) supported
 
-## Computed values
-You can pass in a function as a dynamic value and it will be invoked (with no arguments) in order to compute the value on-the-fly.
-
-    sprintf("Current timestamp: %d", Date.now) // Current timestamp: 1398005382890
-    sprintf("Current date and time: %s", function() { return new Date().toString() })
+Literal numbers, quoted strings, or another named arguments can be passed as an index:
+    var greetings  = {
+        morning: "Good morning",
+        afternoon: "Good afternoon",
+        evening: "Good evening"
+    }
+    sprintf("%(greetings[time])s, Dolly!", { greetings: greetings, time: "afternoon" }) // Good afternoon, Dolly
 
 # AngularJS
 You can now use `sprintf` and `vsprintf` (also aliased as `fmt` and `vfmt` respectively) in your AngularJS projects. See `demo/`.
 
 # Installation
-
-## Via Bower
-
-    bower install sprintf
-
-## Or as a node.js module
-
-    npm install sprintf-js
 
 ### Usage
 

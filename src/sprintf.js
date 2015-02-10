@@ -1,195 +1,216 @@
-(function(window) {
-    var re = {
-        not_string: /[^s]/,
-        number: /[dief]/,
-        text: /^[^\x25]+/,
-        modulo: /^\x25{2}/,
-        placeholder: /^\x25(?:([1-9]\d*)\$|\(([^\)]+)\))?(\+)?(0|'[^$])?(-)?(\d+)?(?:\.(\d+))?([b-fiosuxX])/,
-        key: /^([a-z_][a-z_\d]*)/i,
-        key_access: /^\.([a-z_][a-z_\d]*)/i,
-        index_access: /^\[(\d+)\]/,
-        sign: /^[\+\-]/
+/* sprintf based on ISO C & XSI extensions, alexei extensions (ext_spec) */
+var sprintf = function () {
+  var extended = sprintf.options.enable_extensions;
+  var key = arguments[0], cache = sprintf.cache;
+  if (!cache[extended][key]) {
+    cache[extended][key] = sprintf.parse(key);
+  }
+  return sprintf.format(cache[extended][key], arguments);
+};
+
+sprintf.cache = {true: {}, false: {}};
+
+sprintf.options = {
+  enable_extensions: true,
+};
+
+sprintf.parse = function (template_string) {
+  var extended = sprintf.options.enable_extensions;
+  var starting_rule = extended ? "AConversionTemplate" : "ConversionTemplate";
+  return prepare(sprintf.parser.parse(template_string, { startRule: starting_rule }));
+};
+
+sprintf.format = function (tree, args) {
+  var template = tree.template, arg, ret = "", str="", cursor = 1, i, pad_char, len, root;
+  if (tree.required > args.length - 1) {
+    throw new Error(sprintf("[sprintf] %d arguments are required, but got only %d", tree.required, args.length - 1));
+  }
+  if (tree.required < args.length - 1) {
+    console && console.warn && console.warn(sprintf("[sprintf] %d arguments are required, but got %d", tree.required, args.length - 1));
+  }
+  for (i = 0; i < template.length; i++) {
+    var segment = template[i];
+    if (!segment.type) { // string
+      ret += segment;
+    } else if (segment.type === "spec" || segment.type === "ext_spec") {
+      if (segment.position === null) {
+        arg = args[cursor]; // determined by order
+        cursor++;
+      } else if (segment.type === "ext_spec" && segment.position.type == "Member") {
+        arg = defer_chain(args[1][segment.position.identifier.name], args[1], segment.position.chain);
+      } else { // integer
+        arg = args[segment.position]; // positional
+      }
+      if (specifier_argument_numeric(segment.specifier)) {
+        arg = 1 * arg; // convert to number
+      } else {
+        arg = "" + arg; // convert to string
+      }
+
+      switch (segment.specifier) {
+        case "b":
+          str = format_integer(arg, 2, segment);
+        break;
+        case "c":
+          str = String.fromCharCode(arg);
+        break;
+        case "d":
+        case "i":
+          str = format_integer(arg, 10, segment)
+        break;
+        case "e":
+        case "E":
+          str = format_float(arg, segment, true);
+        break;
+        case "f":
+        case "F":
+          str = format_float(arg, segment, false);
+        break;
+        case "o":
+          str = format_integer(arg, 8, segment);
+        break;
+        case "s":
+          str = (segment.precision === null) ? arg : arg.substring(0, segment.precision);
+        break;
+        case "u":
+          str = format_integer(arg >>> 0, 10, segment)
+        break;
+        case "x":
+        case "X":
+          str = format_integer(arg, 16, segment);
+        break;
+        default:
+          throw sprintf("conversion specifier \"%%%s\"is not supported", segment.specifier);
+      }
+      if (specifier_uppercase(segment.specifier)) {
+        str = str.toUpperCase();
+      }
+      pad_char = (segment.type === "ext_spec" && segment.flags["'"]) ? segment.flags["'"] :
+                 (segment.specifier === "s" && segment.flags["0"]) ? "0" : " ";
+      len = segment.min - str.length;
+      str = pad(str, pad_char, len, segment.flags["-"]);
+      ret += str;
     }
+  }
+  return ret;
+};
 
-    function sprintf() {
-        var key = arguments[0], cache = sprintf.cache
-        if (!(cache[key] && cache.hasOwnProperty(key))) {
-            cache[key] = sprintf.parse(key)
-        }
-        return sprintf.format.call(null, cache[key], arguments)
+var vsprintf = function(fmt, argv, _argv) {
+    _argv = (argv || []).slice(0)
+    _argv.splice(0, 0, fmt)
+    return sprintf.apply(null, _argv)
+};
+
+var prepare = function (template) {
+  var args_required = 0, cursor = 1, i, segment;
+  for (i = 0; i < template.length; i++) {
+    segment = template[i];
+    if (segment.type === "spec" || segment.type === "ext_spec") {
+      if (segment.position === null) {
+        segment.position = cursor;
+        cursor++;
+      } else if (segment.type === "ext_spec" && segment.position.type == "Member") {
+        args_required = Math.max(1, args_required);
+      } else { // integer
+        args_required = Math.max(segment.position, args_required);
+      }
+      if (segment.flags === null) {
+        segment.flags = {"'": false, "#": false, "0": false, " ": false, "+": false, "-": false};
+      }
+      if (segment.min === null) {
+        segment.min = 0;
+      }
+      if (segment.precision === null) {
+        segment.precision = (specifier_float(segment.specifier)) ? 6 : null;
+      }
     }
+  }
+  args_required = Math.max(cursor - 1, args_required);
+  return { template: template, required: args_required };
+};
 
-    sprintf.format = function(parse_tree, argv) {
-        var cursor = 1, tree_length = parse_tree.length, node_type = "", arg, output = [], i, k, match, pad, pad_character, pad_length, is_positive = true, sign = ""
-        for (i = 0; i < tree_length; i++) {
-            node_type = get_type(parse_tree[i])
-            if (node_type === "string") {
-                output[output.length] = parse_tree[i]
-            }
-            else if (node_type === "array") {
-                match = parse_tree[i] // convenience purposes only
-                if (match[2]) { // keyword argument
-                    arg = argv[cursor]
-                    for (k = 0; k < match[2].length; k++) {
-                        if (!arg.hasOwnProperty(match[2][k])) {
-                            throw new Error(sprintf("[sprintf] property '%s' does not exist", match[2][k]))
-                        }
-                        arg = arg[match[2][k]]
-                    }
-                }
-                else if (match[1]) { // positional argument (explicit)
-                    arg = argv[match[1]]
-                }
-                else { // positional argument (implicit)
-                    arg = argv[cursor++]
-                }
+var pad = function (str, pad_char, len, pad_right) {
+  var padding;
+  if (len > 0) {
+    padding = str_repeat(pad_char, len);
+    str = pad_right ? str + padding : padding + str;
+  }
+  return str;
+};
+var specifier_uppercase = function (s) {
+  return ("FEGAX".indexOf(s) !== -1);
+};
+var specifier_argument_numeric = function (s) {
+  return ("bcdiouxXfFeEgGaA".indexOf(s) !== -1);
+};
+var specifier_integer = function (s) {
+  return ("bdiouxX".indexOf(s) !== -1);
+};
+var specifier_float = function (s) {
+  return ("fFeEgGaA".indexOf(s) !== -1);
+};
 
-                if (get_type(arg) == "function") {
-                    arg = arg()
-                }
+var str_repeat = function (ch, len) {
+  var ret = "", i;
+  for (i = 0; i < len; i++) {
+    ret += ch;
+  }
+  return ret;
+};
 
-                if (re.not_string.test(match[8]) && (get_type(arg) != "number" && isNaN(arg))) {
-                    throw new TypeError(sprintf("[sprintf] expecting number but found %s", get_type(arg)))
-                }
+var prepend_sign_symbol = function (str, num, options) {
+  return (num < 0) ? "-" + str :
+         (options.flags["+"]) ? "+" + str :
+         (options.flags[" "]) ? " " + str :
+         str;
+};
+var format_integer = function (num, base, options) {
+  if (isNaN(num))     { return "nan"; }
+  if (!isFinite(num)) { return format_infinity(num, options); }
+  var padlen = 0;
+  num = num > 0 ?  Math.floor(num) : -Math.floor(-num);
+  if (options.precision === 0 && num === 0) { return ""; }
+  var str = Math.abs(num).toString(base);
+  var sign_width = (num < 0 || options.flags["+"] || options.flags[" "]) ? 1 : 0; 
+  if (options.flags["0"] && (!options.flags["-"]) && options.precision === null) {
+    padlen = options.min - sign_width - str.length;
+  }
+  if (options.precision !== null) {
+    padlen = options.precision - str.length;
+  }
+  str = pad(str, "0", padlen, false);
+  return prepend_sign_symbol(str, num, options);
+};
 
-                if (re.number.test(match[8])) {
-                    is_positive = arg >= 0
-                }
+var format_float = function (num, options, exp) {
+  if (isNaN(num))     { return "nan"; }
+  if (!isFinite(num)) { return format_infinity(num, options); }
+  var padlen = 0;
+  var str = exp ? Math.abs(num).toExponential(options.precision) : Math.abs(num).toFixed(options.precision);
+  var sign_width = (num < 0 || options.flags["+"] || options.flags[" "]) ? 1 : 0;
+  if (options.flags["0"] && (!options.flags["-"])) {
+    padlen = options.min - sign_width - str.length;
+  }
+  str = pad(str, "0", padlen, false);
+  return prepend_sign_symbol(str, num, options);
+};
 
-                switch (match[8]) {
-                    case "b":
-                        arg = arg.toString(2)
-                    break
-                    case "c":
-                        arg = String.fromCharCode(arg)
-                    break
-                    case "d":
-                    case "i":
-                        arg = parseInt(arg, 10)
-                    break
-                    case "e":
-                        arg = match[7] ? arg.toExponential(match[7]) : arg.toExponential()
-                    break
-                    case "f":
-                        arg = match[7] ? parseFloat(arg).toFixed(match[7]) : parseFloat(arg)
-                    break
-                    case "o":
-                        arg = arg.toString(8)
-                    break
-                    case "s":
-                        arg = ((arg = String(arg)) && match[7] ? arg.substring(0, match[7]) : arg)
-                    break
-                    case "u":
-                        arg = arg >>> 0
-                    break
-                    case "x":
-                        arg = arg.toString(16)
-                    break
-                    case "X":
-                        arg = arg.toString(16).toUpperCase()
-                    break
-                }
-                if (re.number.test(match[8]) && (!is_positive || match[3])) {
-                    sign = is_positive ? "+" : "-"
-                    arg = arg.toString().replace(re.sign, "")
-                }
-                else {
-                    sign = ""
-                }
-                pad_character = match[4] ? match[4] === "0" ? "0" : match[4].charAt(1) : " "
-                pad_length = match[6] - (sign + arg).length
-                pad = match[6] ? (pad_length > 0 ? str_repeat(pad_character, pad_length) : "") : ""
-                output[output.length] = match[5] ? sign + arg + pad : (pad_character === "0" ? sign + pad + arg : pad + sign + arg)
-            }
-        }
-        return output.join("")
+var format_infinity = function (num, options) {
+  return prepend_sign_symbol("inf", num, options);
+};
+
+var defer_chain = function (obj, root, chain) {
+  var i;
+  for (i = 0; i < chain.length; i++) {
+    var ch = chain[i];
+    if (ch.type === "DotChain") {
+      obj = obj[ch.member];
+    } else if (ch.index.type === "Literal") {
+      obj = obj[ch.index.value];
+    } else {
+      obj = obj[defer_chain(root[ch.index.identifier.name], root, ch.index.chain)];
     }
+  }
+  return obj;
+};
 
-    sprintf.cache = {}
-
-    sprintf.parse = function(fmt) {
-        var _fmt = fmt, match = [], parse_tree = [], arg_names = 0
-        while (_fmt) {
-            if ((match = re.text.exec(_fmt)) !== null) {
-                parse_tree[parse_tree.length] = match[0]
-            }
-            else if ((match = re.modulo.exec(_fmt)) !== null) {
-                parse_tree[parse_tree.length] = "%"
-            }
-            else if ((match = re.placeholder.exec(_fmt)) !== null) {
-                if (match[2]) {
-                    arg_names |= 1
-                    var field_list = [], replacement_field = match[2], field_match = []
-                    if ((field_match = re.key.exec(replacement_field)) !== null) {
-                        field_list[field_list.length] = field_match[1]
-                        while ((replacement_field = replacement_field.substring(field_match[0].length)) !== "") {
-                            if ((field_match = re.key_access.exec(replacement_field)) !== null) {
-                                field_list[field_list.length] = field_match[1]
-                            }
-                            else if ((field_match = re.index_access.exec(replacement_field)) !== null) {
-                                field_list[field_list.length] = field_match[1]
-                            }
-                            else {
-                                throw new SyntaxError("[sprintf] failed to parse named argument key")
-                            }
-                        }
-                    }
-                    else {
-                        throw new SyntaxError("[sprintf] failed to parse named argument key")
-                    }
-                    match[2] = field_list
-                }
-                else {
-                    arg_names |= 2
-                }
-                if (arg_names === 3) {
-                    throw new Error("[sprintf] mixing positional and named placeholders is not (yet) supported")
-                }
-                parse_tree[parse_tree.length] = match
-            }
-            else {
-                throw new SyntaxError("[sprintf] unexpected placeholder")
-            }
-            _fmt = _fmt.substring(match[0].length)
-        }
-        return parse_tree
-    }
-
-    var vsprintf = function(fmt, argv, _argv) {
-        _argv = (argv || []).slice(0)
-        _argv.splice(0, 0, fmt)
-        return sprintf.apply(null, _argv)
-    }
-
-    /**
-     * helpers
-     */
-    function get_type(variable) {
-        return Object.prototype.toString.call(variable).slice(8, -1).toLowerCase()
-    }
-
-    function str_repeat(input, multiplier) {
-        return Array(multiplier + 1).join(input)
-    }
-
-    /**
-     * export to either browser or node.js
-     */
-    if (typeof exports !== "undefined") {
-        exports.sprintf = sprintf
-        exports.vsprintf = vsprintf
-    }
-    else {
-        window.sprintf = sprintf
-        window.vsprintf = vsprintf
-
-        if (typeof define === "function" && define.amd) {
-            define(function() {
-                return {
-                    sprintf: sprintf,
-                    vsprintf: vsprintf
-                }
-            })
-        }
-    }
-})(typeof window === "undefined" ? this : window);
